@@ -79,7 +79,9 @@ public class BroadcastTest extends Configured implements Tool {
         if(out instanceof UnorderedKVOutput) {
           UnorderedKVOutput output = (UnorderedKVOutput) out;
           KeyValueWriter kvWriter = (KeyValueWriter) output.getWriter();
-          kvWriter.write(word, new IntWritable(getContext().getTaskIndex()));
+          for(int i = 0; i < 1024*1024; i++) {
+            kvWriter.write(word, new IntWritable(getContext().getTaskIndex()));
+          }
         }
       }      
     }   
@@ -97,9 +99,12 @@ public class BroadcastTest extends Configured implements Tool {
       Preconditions.checkArgument(inputs.size() == 1);
       KeyValueReader broadcastKvReader = (KeyValueReader) getInputs().get("Broadcast").getReader();
       int sum = 0;
+      int count = 0;
       while (broadcastKvReader.next()) {
+        count++;
         sum += ((IntWritable) broadcastKvReader.getCurrentValue()).get();
       }
+      System.err.println("Count = " + getContext().getTaskIndex() + " * " + count);
     }
   }
 
@@ -114,12 +119,10 @@ public class BroadcastTest extends Configured implements Tool {
 
     Vertex broadcastVertex = Vertex.create("Broadcast", ProcessorDescriptor.create(
         InputProcessor.class.getName()), numBroadcastTasks);
-    broadcastVertex.setTaskLocalFiles(localFiles);
 
     Vertex mapVertex = Vertex.create("Map 1",
         ProcessorDescriptor.create(
-            MapOneProcessor.class.getName()).setUserPayload(procPayload), 20);
-    mapVertex.setTaskLocalFiles(localFiles);
+            MapOneProcessor.class.getName()).setUserPayload(procPayload), 2000);
 
     UnorderedKVEdgeConfig edgeConf = UnorderedKVEdgeConfig
         .newBuilder(Text.class.getName(), IntWritable.class.getName()).build();
@@ -186,21 +189,18 @@ public class BroadcastTest extends Configured implements Tool {
     Map<String, LocalResource> localResources = new HashMap<String, LocalResource>();
     localResources.put("job.jar", createLocalResource(fs, jobJar));
 
-    // No need to add jar containing this class as assumed to be part of
-    // the tez jars.
-
-    // TEZ-674 Obtain tokens based on the Input / Output paths. For now assuming staging dir
-    // is the same filesystem as the one used for Input/Output.
     TezClient tezSession = null;
     // needs session or else TaskScheduler does not hold onto containers
     tezSession = TezClient.create("BroadcastTest", tezConf);
-    tezSession.addAppMasterLocalResources(localResources);
+    tezSession.addAppMasterLocalFiles(localResources);
     tezSession.start();
 
     DAGClient dagClient = null;
 
     try {
         DAG dag = createDAG(fs, tezConf, stagingDir, localResources);
+        
+        dag.addTaskLocalFiles(localResources);
 
         tezSession.waitTillReady();
         dagClient = tezSession.submitDAG(dag);
